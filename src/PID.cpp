@@ -32,6 +32,16 @@ void PID::UpdateError(double cte) {
 }
 
 double PID::TotalError() {
-  return -(p_error * Kp + i_error * Ki + d_error * Kd);
+//  this->total_error = p_error * Kp + i_error * Ki + d_error * Kd;
+  return p_error * Kp + i_error * Ki + d_error * Kd;
 }
 
+void PID::UpdateK(int i, double K) {
+  if(i==0) {
+    this->Kp = K;
+  } else if (i==1) {
+    this->Kd = K;
+  } else {
+    this->Ki = K;
+  }
+}

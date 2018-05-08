@@ -3,6 +3,7 @@
 #include "json.hpp"
 #include "PID.h"
 #include <math.h>
+#include <valarray>     // std::valarray
 
 // for convenience
 using json = nlohmann::json;
@@ -28,17 +29,94 @@ std::string hasData(std::string s) {
   return "";
 }
 
-double target_speed = 70;
+// added for twiddler
+double p[] = {0, 0, 0};
+double dp[] = {1, 1, 1};
+double tolerance = 0.001;
+std::valarray<double> dpSum (dp, 3);
+
+int num_params = 3;
+int twAdjustingParamIndex  = -1;
+int twBatchSize = 10;
+int twRunCounter = 0;
+int itTwOpt = 0;
+
+double best_err = 100;
+
+bool twResetParams = true;
+bool twOptimized = false;
+
+//int atParamIndex = -1;
+
+void twiddleOptimizer(PID &pidcontrol) {
+
+  double paramsDelta = 0;
+  itTwOpt++;
+  twRunCounter = 0;
+
+  std::cout << "Optimizer: " << itTwOpt << ", Error: " << pidcontrol.TotalError() << std::endl;
+  std::cout << "Params: " << p[0] << ", " << p[1] << ", " << p[2] << std::endl;
+
+  if (dpSum.sum() > tolerance) {
+
+    // pick the correct parameter that need to be adjusted.
+    if(!twResetParams) { // if the twiddler is going through the reset cycle just continue to verifying error again
+                         // without moving to next index.
+      twAdjustingParamIndex++;
+      if(twAdjustingParamIndex >= num_params) {
+        twAdjustingParamIndex = 0;
+      }
+    }
+
+    if (twResetParams) {
+      // reset the adjustments made to the params, if the change is increasing the error
+      if(fabs(pidcontrol.TotalError()) < best_err) {
+        best_err = fabs(pidcontrol.TotalError());
+        dp[twAdjustingParamIndex] *= 1.1;
+      } else {
+        p[twAdjustingParamIndex] += dp[twAdjustingParamIndex];
+        dp[twAdjustingParamIndex] *= 0.9;
+      }
+
+      twResetParams = false;
+      return;
+    }
+
+    if (fabs(pidcontrol.TotalError()) < best_err) {
+      // when a better error is found
+      //  // set that as a best error
+      //  // and adjust dParams
+
+      best_err = fabs(pidcontrol.TotalError());
+      paramsDelta = 1.1 * dp[twAdjustingParamIndex];
+    } else {
+      // if the newly found error is worse than the best_err error - reset the value of params
+      paramsDelta = -2 * dp[twAdjustingParamIndex];
+      twResetParams = true;
+    }
+
+    // update params with estimated change.
+    p[twAdjustingParamIndex] += paramsDelta; // dp[twAdjustingParamIndex];
+
+  } else {
+    twOptimized = true;
+  }
+
+  return;
+}
 
 int main()
 {
   uWS::Hub h;
 
   PID pidSteering, pidThrottle;
+  // TODO: Initialize the pid variable.
 
-  // Initialize the pid params - used values optimized manually with the help of twiddle
-  pidSteering.Init(0.135, 0.001, 3.05);
-  pidThrottle.Init(0.32, 0.001, 0.02);
+//  pidSteering.Init(0.134611, 0.000270736, 3.05349);
+//  pidThrottle.Init(0.316731, 0.0000, 0.0226185);
+
+//  pidSteering.Init(0, 0, 0);
+  pidSteering.Init(0.1, 0.001, 2);
 
   h.onMessage([&pidSteering, &pidThrottle](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -56,43 +134,48 @@ int main()
           double speed = std::stod(j[1]["speed"].get<std::string>());
           double angle = std::stod(j[1]["steering_angle"].get<std::string>());
           double steer_value, throttle_value;
+          /*
+          * TODO: Calcuate steering value here, remember the steering value is
+          * [-1, 1].
+          * NOTE: Feel free to play around with the throttle and speed. Maybe use
+          * another PID controller to control the speed!
+          */
 
-          // use pid controller for adjusting the steering wheels.
           pidSteering.UpdateError(cte);
           steer_value = pidSteering.TotalError();
 
-          // using a second pid controller for adjusting the throttle
-          // adding this pid controller introduced waviness to the controls. todo - needs further improvement.
-          // however increase in speeds were really good.
-          pidThrottle.UpdateError(cte*cte + pow((target_speed-speed)/100, 2));
-          throttle_value = fabs(pidThrottle.TotalError());
-
-          // set steering value with in the limits
-          if(steer_value > 1) {
-            steer_value = 1;
-          } else if (steer_value < -1) {
-            steer_value = -1;
+          if(!twOptimized && twRunCounter >= twBatchSize) {
+            twiddleOptimizer(pidSteering);
           }
+
+          if(!twOptimized) {
+            twRunCounter++;
+          }
+
+//          // applicable only when a 2nd pid controller is used or throttling
+//          pidThrottle.UpdateError(0.5-speed);
+//          throttle_value = pidThrottle.TotalError();
 
           // DEBUG
-          std::cout << "CTE: " << cte << " Angle: " << angle << " Steering: " << steer_value << " Throttle: " << throttle_value << " Speed: " << speed << std::endl;
+          std::cout << "CTE: " << cte << " Steering Value: " << steer_value << std::endl;
+//          std::cout << "CTE: " << cte << " Throttle Value: " << throttle_value << std::endl;
+//          std::cout << "CTE: " << cte << " speed Value: " << speed << std::endl;
 
+//          // applicable only when a 2nd pid controller is used or throttling
+//          json msgJson;
+//          msgJson["steering_angle"] = steer_value;
+//          if(speed > 0.1) {
+//            msgJson["throttle"] = speed + throttle_value;
+//          } else {
+//            msgJson["throttle"] = 0.3;
+//          }
+
+          // model with constant throttle.
           json msgJson;
           msgJson["steering_angle"] = steer_value;
-
-          if(throttle_value > 0 && throttle_value  < 1) {
-            // apply brakes when the values steering and throttle go beyond thresholds
-            int sCap = 1;
-            if (speed >= target_speed || fabs(steer_value) > 0.5) {
-              sCap = -1;
-            }
-            msgJson["throttle"] = (speed/100) + sCap * throttle_value;
-          } else {
-            msgJson["throttle"] = 0.2;
-          }
-
+          msgJson["throttle"] = 0.3;
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
-          std::cout << msg << std::endl;
+//          std::cout << msg << std::endl;
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
