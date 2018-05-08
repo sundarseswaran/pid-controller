@@ -40,9 +40,6 @@ int main()
   pidSteering.Init(0.135, 0.001, 3.05);
   pidThrottle.Init(0.32, 0.001, 0.02);
 
-//  pidSteering.Init(0.134611, 0.000270736, 3.05349);
-//  pidThrottle.Init(0.316731, 0.0000, 0.0226185);
-
   h.onMessage([&pidSteering, &pidThrottle](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -59,18 +56,18 @@ int main()
           double speed = std::stod(j[1]["speed"].get<std::string>());
           double angle = std::stod(j[1]["steering_angle"].get<std::string>());
           double steer_value, throttle_value;
-          /*
-          * TODO: Calcuate steering value here, remember the steering value is [-1, 1].
-          * NOTE: Feel free to play around with the throttle and speed. Maybe use
-          * another PID controller to control the speed!
-          */
 
+          // use pid controller for adjusting the steering wheels.
           pidSteering.UpdateError(cte);
           steer_value = pidSteering.TotalError();
 
+          // using a second pid controller for adjusting the throttle
+          // adding this pid controller introduced waviness to the controls. todo - needs further improvement.
+          // however increase in speeds were really good.
           pidThrottle.UpdateError(cte*cte + pow((target_speed-speed)/100, 2));
           throttle_value = fabs(pidThrottle.TotalError());
 
+          // set steering value with in the limits
           if(steer_value > 1) {
             steer_value = 1;
           } else if (steer_value < -1) {
@@ -84,6 +81,7 @@ int main()
           msgJson["steering_angle"] = steer_value;
 
           if(throttle_value > 0 && throttle_value  < 1) {
+            // apply brakes when the values steering and throttle go beyond thresholds
             int sCap = 1;
             if (speed >= target_speed || fabs(steer_value) > 0.5) {
               sCap = -1;
